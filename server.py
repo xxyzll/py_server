@@ -111,7 +111,7 @@ class Server(Request):
             pipe: 命名管道
             time_inter: 定时器间隔
         """
-        su
+        
         # TCP相关
         self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)        # TCP
         self.listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)      # IO复用
