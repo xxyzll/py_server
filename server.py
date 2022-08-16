@@ -44,15 +44,15 @@ class Request:
             ret_head += f"Connection: {keep_alive}\r\n"
             ret_head += '\r\n'
 
-            self.rerespone_data[fd] = {
-                'head': bytes(ret_head),
+            self.respone_data[fd] = {
+                'head': bytes(ret_head.encode('utf-8')),
                 'body': {
                     'f': open(path, 'rb'),
                     'offset': 0,
                     'count': os.path.getsize(path)
                 }
             }
-            self.modify(fd, epoll_out=True)
+            self.modify(fd, epoll_out=True, epoll_oneshort=False)
             return (True, fd)
         else:
             return (True, fd)
@@ -111,7 +111,7 @@ class Server(Request):
             pipe: 命名管道
             time_inter: 定时器间隔
         """
-        
+        super().__init__()
         # TCP相关
         self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)        # TCP
         self.listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)      # IO复用
@@ -147,7 +147,7 @@ class Server(Request):
                         self.epoll.register(client_socket.fileno(), select.EPOLLIN | select.EPOLLONESHOT)
                         self.connections[client_socket.fileno()] = client_socket
                         client_socket.setblocking(0)
-                        print('新连接')
+                        print(f'新连接 {client_socket.fileno()}')
                     else:
                         if (event & select.EPOLLIN or event & select.EPOLLOUT):
                             t = self.th_pool.submit(self.action, fileno, event) 
@@ -172,7 +172,7 @@ class Server(Request):
                 return (False, fd)
 
         if(event & select.EPOLLOUT):
-            print('out 事件')
+            print(f'out 事件 {fd}')
             try:
                 # 发送头
                 if('head' in self.respone_data[fd]):
@@ -186,14 +186,17 @@ class Server(Request):
                 if(byte_num> 0):
                     send_num = os.sendfile(fd, file_no, offset, byte_num)
                     self.respone_data[fd]['body']['offset'] += send_num
-                else:
-                    keep_alive = True if ('keep_alive' in request["path"] and request["path"]['keep_alive'] == 'True') else False
+
+                print(f'byte_num {byte_num} offset {offset} send_num {send_num}')
+                if(send_num == byte_num):
+                    print('ok')
+                    keep_alive =  False
                     if(keep_alive):
                         self.modify(fd, epoll_in=True)
-                        return (fd, True)
+                        return (True, fd)
                     else:
-                        return (fd, False)
-                return (False, fd)
+                        return (False, fd)
+                return (True, fd)
 
             except :
                 # 输出错误原因
@@ -236,6 +239,7 @@ class Server(Request):
                 self.respone_data[fd]['body']['f'].close()
             self.respone_data.pop(fd)
         del self.connections[fd]
+        print(f'断开 {fd}')
 
     def callback(self, ret):
         res = ret.result()
