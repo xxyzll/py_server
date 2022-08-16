@@ -14,9 +14,11 @@ import ctypes
 import os
 import schedule
 from urllib.parse import unquote, quote
+from log import Log
+import _thread
 
-
-
+log = Log()
+t= threading.Thread(target=log.run).start()
 # 解析请求
 class Request:
     def __init__(self):
@@ -30,7 +32,6 @@ class Request:
 
     # 编码请求
     def encode(self, code: int, request: dict, fd: int):
-        print(code)
         if(code == 200):
             path = '%s%s'%('./root', request['path'][0])
             title = self.state_code[code]['title']
@@ -129,6 +130,9 @@ class Server(Request):
         # 定时连接控制
         self.time_inter = time_inter
 
+        # 互斥锁
+        self.mutex = threading.Lock()
+
         # 处理请求函数
         self.respone_func = {
             'GET': self.deal_get,
@@ -147,7 +151,7 @@ class Server(Request):
                         self.epoll.register(client_socket.fileno(), select.EPOLLIN | select.EPOLLONESHOT)
                         self.connections[client_socket.fileno()] = client_socket
                         client_socket.setblocking(0)
-                        print(f'新连接 {client_socket.fileno()}')
+                        log.add_out(f'新连接 {client_socket.fileno()} 注册')
                     else:
                         if (event & select.EPOLLIN or event & select.EPOLLOUT):
                             t = self.th_pool.submit(self.action, fileno, event) 
@@ -162,17 +166,18 @@ class Server(Request):
         if (event & select.EPOLLIN):
             try:
                 rev_str = self.connections[fd].recv(1024).decode('utf-8')
+                if(len(rev_str) == 0):
+                    return (False, fd)
                 request = self.decode(rev_str)
                 self.request[fd] = request
-                return self.respone_func[request['method']](request, fd)
-                
+                return self.respone_func[request['method']](self.request[fd], fd)
             except :
                 # 输出错误原因
-                print(traceback.format_exc())
+                log.add_out(traceback.format_exc())
                 return (False, fd)
 
         if(event & select.EPOLLOUT):
-            print(f'out 事件 {fd}')
+            log.add_out(f'out 事件 {fd}')
             try:
                 # 发送头
                 if('head' in self.respone_data[fd]):
@@ -187,9 +192,9 @@ class Server(Request):
                     send_num = os.sendfile(fd, file_no, offset, byte_num)
                     self.respone_data[fd]['body']['offset'] += send_num
 
-                print(f'byte_num {byte_num} offset {offset} send_num {send_num}')
+                log.add_out(f'byte_num {byte_num} offset {offset} send_num {send_num}')
                 if(send_num == byte_num):
-                    print('ok')
+                    log.add_out('ok')
                     keep_alive =  False
                     if(keep_alive):
                         self.modify(fd, epoll_in=True)
@@ -200,12 +205,11 @@ class Server(Request):
 
             except :
                 # 输出错误原因
-                print(traceback.format_exc())
+                log.add_out(traceback.format_exc())
                 return (False, fd)
     # 处理get
     def deal_get(self, request: list, fd: int) -> tuple:
         req_path = '%s%s'%('./root', request['path'][0])
-        print(req_path)
         # 权限核对
         state_code = 200
         if(os.path.exists(req_path) is False):
@@ -238,11 +242,13 @@ class Server(Request):
             if('body' in self.respone_data):
                 self.respone_data[fd]['body']['f'].close()
             self.respone_data.pop(fd)
-        del self.connections[fd]
-        print(f'断开 {fd}')
+        self.connections.pop(fd)
+        log.add_out(f'断开 {fd} 取消注册')
 
     def callback(self, ret):
         res = ret.result()
         if(res[0] == False):
+            self.mutex.acquire()
             self.clear_connect(res[1])
+            self.mutex.release()
 
